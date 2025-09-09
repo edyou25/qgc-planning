@@ -10,10 +10,16 @@ from datetime import datetime
 import sys  # 添加系统模块导入
 
 # 设置matplotlib支持中文
-matplotlib.rcParams['font.sans-serif'] = ['SimHei']
+matplotlib.rcParams['font.sans-serif'] = ['Arial', 'DejaVu Sans', 'SimHei']  # 尝试先使用通用英文字体
 matplotlib.rcParams['axes.unicode_minus'] = False
 matplotlib.rcParams['figure.figsize'] = [14, 10]
 matplotlib.rcParams['figure.autolayout'] = True
+
+# 设置backend为TkAgg，提高绘图响应速度
+try:
+    matplotlib.use('TkAgg')  # 这个后端在交互性和响应速度方面表现更好
+except:
+    pass  # 如果已经初始化了其他后端，可能会失败，但不影响程序
 
 # 配置
 WSL_IP = "0.0.0.0"   # 监听所有接口
@@ -42,7 +48,7 @@ def handle_close(evt):
     """处理窗口关闭事件"""
     global terminate
     terminate = True
-    print("窗口关闭，程序即将退出...")
+    print("Window closed, program will exit...")
     plt.close('all')
 
 # 路径优化函数
@@ -56,12 +62,12 @@ def init_plot():
     global fig, ax, info_ax
     plt.ion()
     
-    fig = plt.figure(figsize=(14, 10))
+    fig = plt.figure(figsize=(7, 5))
     gs = fig.add_gridspec(1, 4)
     ax = fig.add_subplot(gs[0, :3])  # 主图占3/4
     info_ax = fig.add_subplot(gs[0, 3])  # 信息面板占1/4
     
-    fig.canvas.manager.set_window_title('QGC航点可视化与路径规划系统')
+    fig.canvas.manager.set_window_title('QGC Waypoint Visualization System')
     
     # 添加窗口关闭事件处理
     fig.canvas.mpl_connect('close_event', handle_close)
@@ -82,7 +88,7 @@ def add_status_message(message):
     status_messages.append(f"[{timestamp}] {message}")
     if len(status_messages) > max_status_messages:
         status_messages = status_messages[-max_status_messages:]
-    print(f"状态: {message}")
+    print(f"Status: {message}")
 
 def update_plot(frame):
     """更新图形数据"""
@@ -154,8 +160,8 @@ def update_plot(frame):
                 info_text.append(f"WP Count: {len(waypoints_global)}")
             else:
                 info_text.extend([
-                    f"📡 Waiting for WP data...",
-                    f"⏰ Wait time: {int(elapsed_time)}s",
+                    f"* Waiting for WP data...",
+                    f"* Wait time: {int(elapsed_time)}s",
                     "="*20,
                     "Tip: Create mission in QGC",
                     "Setup comm link as instructed"
@@ -165,15 +171,15 @@ def update_plot(frame):
             if current_position['lat'] is not None:
                 info_text.extend([
                     "="*20,
-                    "📍 Current Position:",
-                    f"🌐 Lat: {current_position['lat']:.6f}",
-                    f"🌐 Lon: {current_position['lon']:.6f}", 
-                    f"🔼 Alt: {current_position['alt']:.1f} m",
+                    "* Current Position:",
+                    f"* Lat: {current_position['lat']:.6f}",
+                    f"* Lon: {current_position['lon']:.6f}", 
+                    f"* Alt: {current_position['alt']:.1f} m",
                 ])
             else:
                 info_text.extend([
                     "="*20,
-                    "📍 No position data",
+                    "* No position data",
                     "Ensure UAV connected to QGC"
                 ])
             
@@ -181,7 +187,7 @@ def update_plot(frame):
             if status_messages:
                 info_text.extend([
                     "="*20,
-                    "📝 Latest Status:"
+                    "* Latest Status:"
                 ])
                 info_text.append(status_messages[-1])
             
@@ -201,8 +207,8 @@ def position_listener(connection):
     """监听位置更新"""
     global current_position, position_history, lock
     
-    print("开始监听位置信息...")
-    add_status_message("开始监听位置信息")
+    print("Starting position monitoring...")
+    add_status_message("Starting position monitoring")
     
     # 请求位置数据流
     try:
@@ -232,11 +238,11 @@ def position_listener(connection):
             2,  # 2 Hz
             1   # 启用
         )
-        print("已请求位置和状态数据流")
-        add_status_message("已请求所有数据流")
+        print("Position and status data streams requested")
+        add_status_message("All data streams requested")
     except Exception as e:
-        print(f"请求数据流出错: {e}")
-        add_status_message(f"数据流请求失败: {str(e)[:30]}")
+        print(f"Error requesting data streams: {e}")
+        add_status_message(f"Data stream request failed: {str(e)[:30]}")
     
     message_count = 0
     last_status_time = time.time()
@@ -251,7 +257,7 @@ def position_listener(connection):
                 # 每10秒打印一次状态
                 current_time = time.time()
                 if current_time - last_status_time > 10:
-                    print(f"已接收 {message_count} 条消息")
+                    print(f"Received {message_count} messages")
                     last_status_time = current_time
             
             # 接收位置信息
@@ -269,7 +275,7 @@ def position_listener(connection):
                         current_position['alt'] = msg.alt / 1000
                         # 减少位置打印，降低控制台输出量
                         if message_count % 20 == 0:  # 每20条消息打印一次
-                            print(f"收到位置: 纬度={current_position['lat']:.6f}, 经度={current_position['lon']:.6f}")
+                            print(f"Position: Lat={current_position['lat']:.6f}, Lon={current_position['lon']:.6f}")
                     
                     elif msg.get_type() == 'GPS_RAW_INT':
                         current_position['lat'] = msg.lat / 1e7
@@ -291,22 +297,22 @@ def position_listener(connection):
                             position_history['time'] = position_history['time'][-100:]
         except Exception as e:
             if not str(e).startswith('timeout on') and not str(e) == 'None':  # 忽略常见的超时错误
-                print(f"位置监听错误: {e}")
+                print(f"Position monitoring error: {e}")
             time.sleep(0.1)  # 减少CPU使用
 
 # 主程序
-print(f"连接到QGC, 监听 {WSL_IP}:{QGC_PORT} ...")
-print(f"在QGC中, 请配置通信链接:")
-print(f"1. 点击齿轮图标 (⚙️)")
-print(f"2. 选择 '通信链接' 菜单")
-print(f"3. 点击 '添加' 创建新链接")
-print(f"4. 设置类型: UDP")
-print(f"5. 添加服务器URL - 主机: {WINDOWS_IP}, 端口: {QGC_PORT}")
-print(f"6. 点击确定并连接此链接")
+print(f"Connecting to QGC, listening on {WSL_IP}:{QGC_PORT} ...")
+print(f"In QGC, please configure communication link:")
+print(f"1. Click gear icon (⚙️)")
+print(f"2. Select 'Comm Links' menu")
+print(f"3. Click 'Add' to create a new link")
+print(f"4. Set type: UDP")
+print(f"5. Add server URL - Host: {WINDOWS_IP}, Port: {QGC_PORT}")
+print(f"6. Click OK and connect this link")
 
 # 初始化可视化
 init_plot()
-add_status_message("可视化系统初始化")
+add_status_message("Visualization system initialized")
 
 # 建立连接
 connections = []
@@ -315,17 +321,17 @@ for port in ports:
     try:
         conn = mavutil.mavlink_connection(f'udp:{WSL_IP}:{port}')
         connections.append(conn)
-        print(f"连接到端口 {port} 成功")
+        print(f"Connection to port {port} successful")
     except Exception as e:
-        print(f"连接到端口 {port} 失败: {e}")
+        print(f"Connection to port {port} failed: {e}")
 
 if not connections:
-    print("警告: 无法建立连接")
-    add_status_message("警告: 无法建立连接")
+    print("Warning: Unable to establish connection")
+    add_status_message("Warning: Unable to establish connection")
 else:
     connection = connections[0]  # 使用第一个连接作为主连接
-    print("连接已建立")
-    add_status_message("连接已建立")
+    print("Connection established")
+    add_status_message("Connection established")
 
     # 设置目标系统和组件ID
     connection.target_system = 1
@@ -334,10 +340,10 @@ else:
     # 启动位置监听线程
     position_thread = threading.Thread(target=position_listener, args=(connection,), daemon=True)
     position_thread.start()
-    print("位置监听线程已启动")
+    print("Position monitoring thread started")
 
     # 请求航点
-    print("请求任务航点列表...")
+    print("Requesting mission waypoint list...")
     connection.mav.mission_request_list_send(connection.target_system, connection.target_component)
 
     # 接收航点
@@ -346,8 +352,8 @@ else:
     mission_timeout = 1  # 减少超时时间，加快界面显示
     start_time = time.time()
 
-    print("尝试接收航点数据...")
-    add_status_message("尝试接收航点数据")
+    print("Attempting to receive waypoint data...")
+    add_status_message("Attempting to receive waypoint data")
 
     while time.time() - start_time < mission_timeout:
         msg = connection.recv_match(type=['MISSION_ITEM', 'MISSION_COUNT'], blocking=False)
@@ -357,8 +363,8 @@ else:
 
         if msg.get_type() == 'MISSION_COUNT':
             mission_count = msg.count
-            print(f"任务包含 {mission_count} 个航点")
-            add_status_message(f"检测到 {mission_count} 个航点")
+            print(f"Mission contains {mission_count} waypoints")
+            add_status_message(f"Detected {mission_count} waypoints")
             for seq in range(mission_count):
                 connection.mav.mission_request_send(connection.target_system, connection.target_component, seq)
 
@@ -372,7 +378,7 @@ else:
                 'z': msg.z,
             }
             waypoints.append(wp)
-            print(f"接收到航点 #{msg.seq}")
+            print(f"Received waypoint #{msg.seq}")
             
             with lock:
                 waypoints_global = waypoints.copy()
@@ -383,7 +389,7 @@ else:
     # 优化路径
     if waypoints:
         optimized_waypoints = optimize_waypoints(waypoints)
-        print("路径优化完成")
+        print("Path optimization completed")
         
         with lock:
             waypoints_optimized_global = optimized_waypoints.copy()
@@ -396,14 +402,14 @@ else:
         feature_collection = geojson.FeatureCollection(features)
         with open("optimized_waypoints.geojson", "w") as f:
             geojson.dump(feature_collection, f, indent=2)
-        print("GeoJSON 已保存到 optimized_waypoints.geojson")
+        print("GeoJSON saved to optimized_waypoints.geojson")
     else:
-        print("未接收到航点")
+        print("No waypoints received")
 
 # 启动可视化
 try:
-    print("启动实时可视化界面...")
-    add_status_message("启动可视化界面")
+    print("Starting real-time visualization...")
+    add_status_message("Visualization interface started")
     
     # 重置开始时间，使计时从可视化启动时开始
     start_time = time.time()
@@ -417,7 +423,7 @@ try:
     plt.show(block=False)
     
     # 保持程序运行直到用户关闭窗口或按Ctrl+C
-    print("可视化界面已启动，按Ctrl+C退出...")
+    print("Visualization interface running, press Ctrl+C to exit...")
     last_update = time.time()
     
     try:
@@ -431,16 +437,16 @@ try:
                 last_update = current_time
                 
                 # 确保UI更新
-                plt.pause(0.001)  # 非常短的暂停，处理GUI事件
+                plt.pause(0.01)  # 非常短的暂停，处理GUI事件
             
             # 短暂睡眠，减少CPU使用
             time.sleep(0.01)
             
     except KeyboardInterrupt:
-        print("用户终止程序")
+        print("User terminated program")
         
 except Exception as e:
-    print(f"可视化错误: {e}")
+    print(f"Visualization error: {e}")
     import traceback
     traceback.print_exc()
     
@@ -453,5 +459,5 @@ except Exception as e:
     
 finally:
     # 确保程序正常退出
-    print("程序退出")
+    print("Program exiting")
     terminate = True
