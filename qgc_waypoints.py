@@ -62,7 +62,10 @@ def init_plot():
     global fig, ax, info_ax
     plt.ion()
     
-    fig = plt.figure(figsize=(7, 5))
+    # 创建适当大小的图形，确保响应性
+    fig = plt.figure(figsize=(12, 8), dpi=100)
+    fig.set_tight_layout(True)
+    
     gs = fig.add_gridspec(1, 4)
     ax = fig.add_subplot(gs[0, :3])  # 主图占3/4
     info_ax = fig.add_subplot(gs[0, 3])  # 信息面板占1/4
@@ -72,12 +75,17 @@ def init_plot():
     # 添加窗口关闭事件处理
     fig.canvas.mpl_connect('close_event', handle_close)
     
+    # 初始化坐标轴
     ax.set_xlabel('Longitude')
     ax.set_ylabel('Latitude')
     ax.set_title('QGC Waypoints & Live Position')
     ax.grid(True)
     
     info_ax.axis('off')
+    
+    # 确保画布刷新
+    fig.canvas.draw()
+    plt.pause(0.1)
     
     return fig, ax, info_ax
 
@@ -99,6 +107,7 @@ def update_plot(frame):
         elapsed_time = max(0.001, current_time - start_time)
         
         with lock:
+            # 清除之前的内容
             ax.clear()
             info_ax.clear()
             
@@ -109,8 +118,8 @@ def update_plot(frame):
                 waypoint_y = [wp['y'] for wp in waypoints_global]
                 ax.plot(waypoint_x, waypoint_y, 'bo-', label='Original WP')
                 
-                # 标记航点序号 (简化处理，只标记前10个点)
-                for i, (x, y) in enumerate(zip(waypoint_x[:10], waypoint_y[:10])):
+                # 标记航点序号 (简化处理，只标记前10个点，减少渲染压力)
+                for i, (x, y) in enumerate(zip(waypoint_x[:min(10, len(waypoint_x))], waypoint_y[:min(10, len(waypoint_y))])):
                     ax.annotate(str(i), (x, y), textcoords="offset points", 
                                 xytext=(0, 10), ha='center')
             
@@ -120,35 +129,38 @@ def update_plot(frame):
                     opt_waypoint_y = [wp['y'] for wp in waypoints_optimized_global]
                     ax.plot(opt_waypoint_x, opt_waypoint_y, 'ro--', label='Optimized WP')
                 
-                # 绘制实时位置
+                # 绘制实时位置 - 简化绘图以提高性能
                 if position_history['lat'] and position_history['lon']:
-                    # 简化轨迹，只绘制部分点，减少计算量
-                    step = max(1, len(position_history['lat']) // 20)
+                    # 使用更大的步长简化轨迹绘制，减少图形元素数量
+                    step = max(1, len(position_history['lat']) // 10)
                     ax.plot(position_history['lon'][::step], position_history['lat'][::step], 
-                            'g-', alpha=0.5, label='Flight Path')
+                            'g-', alpha=0.5, linewidth=1.5, label='Flight Path')
                     
                     # 绘制当前位置
                     ax.plot(position_history['lon'][-1], position_history['lat'][-1], 
                             'g*', markersize=10, label='Current Pos')
                 
-                ax.legend(loc='best')
+                # 添加图例，但位置更合理
+                ax.legend(loc='upper right', fontsize='small')
                 
+                # 坐标轴标签
                 ax.set_xlabel('Longitude')
                 ax.set_ylabel('Latitude')
                 alt_text = "Unknown" if current_position["alt"] is None else f"{current_position['alt']:.1f}"
-                ax.set_title(f'QGC Waypoints & Live Position (Alt: {alt_text} m)')
+                ax.set_title(f'QGC Waypoints & Live Position (Alt: {alt_text} m)', fontsize=10)
             else:
                 # 当没有航点时，只显示基本坐标系
                 ax.set_title('Waiting for waypoint data...')
                 ax.set_xlabel('Longitude')
                 ax.set_ylabel('Latitude')
             
-            ax.grid(True)
+            # 添加网格线，提高可读性
+            ax.grid(True, linestyle='--', alpha=0.7)
             
-            # 更新信息面板
+            # 更新信息面板 - 简化信息显示
             info_ax.axis('off')
             
-            # 构建信息文本
+            # 构建信息文本，但不要太复杂
             info_text = [
                 "System Status",
                 "="*20,
@@ -200,7 +212,7 @@ def update_plot(frame):
         # 不使用blit模式，返回空列表
         return []
     except Exception as e:
-        print(f"更新图形时出错: {e}")
+        print(f"Plot update error: {e}")
         return []
 
 def position_listener(connection):
@@ -418,8 +430,7 @@ try:
     # 使用非阻塞模式显示图形
     plt.ion()  # 交互模式打开
     
-    # 不使用 FuncAnimation，而是手动更新绘图
-    # 这样可以更好地控制更新频率和响应性
+    # 使用更简单的手动更新循环，减少绘图负担
     plt.show(block=False)
     
     # 保持程序运行直到用户关闭窗口或按Ctrl+C
@@ -436,11 +447,11 @@ try:
                 frame_count += 1
                 last_update = current_time
                 
-                # 确保UI更新
-                plt.pause(0.01)  # 非常短的暂停，处理GUI事件
+                # 确保处理所有挂起的GUI事件，使界面保持响应
+                fig.canvas.start_event_loop(0.001)  # 让GUI处理事件但不阻塞
             
             # 短暂睡眠，减少CPU使用
-            time.sleep(0.01)
+            time.sleep(0.05)
             
     except KeyboardInterrupt:
         print("User terminated program")
