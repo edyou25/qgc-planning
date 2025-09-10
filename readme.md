@@ -1,114 +1,87 @@
 # Planning-QGC-PX4-AirSim
 
-```shell
-make px4_sitl_default none_iris
-mavlink start -u 14552 -o 14551 -m onboard -r 400000 -t 127.0.0.1 -f
-```
-
 
 ## 通信架构概述
 
 1. **PX4 (WSL)** → 向QGC发送飞行数据
-2. **QGC (WSL)** → 处理数据并转发到Windows
-3. **Windows监听程序** → 接收、分析和优化航点数据
+2. **QGC (WSL)** → 处理数据并转发到Python
+3. **Python监听程序** → 接收、分析和优化航点数据
 4. **AirSim (Windows)** → 可能通过GeoJSON文件或直接MAVLink连接获取数据
 
-## Mavlink字段
 
-# MAVLink 主要消息类型
+## 核心 MAVLink 消息速览
+名称(ID)  关键字段 / 作用
 
-MAVLink协议包含大量消息类型，用于无人机系统的通信。以下是一些最常用的消息类型分类：
+### 基础 / 系统
+- HEARTBEAT(0)  type, autopilot, base_mode, system_status  心跳/状态机基准
+- SYS_STATUS(1)  sensors_present/active, voltage_battery, load  基本健康
+- SYSTEM_TIME(2)  time_unix_usec  时间同步
+- STATUSTEXT(253)  severity, text  文本告警
 
-## 基础状态与控制消息
+### 时延/测试
+- PING(4)  seq, time_usec  往返延迟测量
 
-1. **HEARTBEAT** (ID=0)
-   - 系统心跳，包含系统类型、自动驾驶仪类型、系统状态等
-   - 所有MAVLink系统必须每秒发送至少1次
+### 参数
+- PARAM_REQUEST_LIST(21)  请求全部参数
+- PARAM_VALUE(22)  param_id, value, index, count  返回参数条目
+- PARAM_SET(23)  修改参数
 
-2. **SYS_STATUS** (ID=1)
-   - 系统状态，包含电池、通信和传感器状态
+### 位置 / 姿态 / 传感
+- LOCAL_POSITION_NED(32)  x,y,z,vx,vy,vz  本地 NED 位置速度
+- GLOBAL_POSITION_INT(33)  lat,lon,alt,relative_alt,vx,vy,vz  全球+相对高
+- ATTITUDE(30)  roll,pitch,yaw, *rate  欧拉姿态
+- ALTITUDE(141)  altitude_amsl, altitude_relative  多参考高度
+- HIGHRES_IMU(105)  加速度/陀螺/磁/气压/温度
+- GPS_RAW_INT(24)  lat,lon,alt, eph,epv, fix_type, satellites_visible  原始 GPS
+- ODOMETRY(331)  姿态+位置+速度融合
 
-3. **SYSTEM_TIME** (ID=2)
-   - 同步系统时间
+### 任务 (Mission)
+- MISSION_COUNT(44)  count  航点总数
+- MISSION_ITEM(39) / MISSION_ITEM_INT(73)  seq, command, x,y,z  单航点(后者高精度)
+- MISSION_REQUEST(40)  seq  请求指定航点
+- MISSION_CURRENT(42)  seq  当前执行航点
+- MISSION_ITEM_REACHED(46)  seq  已到达航点
+- MISSION_ACK(47)  type  任务处理结果
 
-4. **PING** (ID=4)
-   - 测试通信延迟和可靠性
+### 控制 / 期望
+- POSITION_TARGET_LOCAL_NED(85)  setpoint  本地位置/速度/加速度/航向期望
+- ATTITUDE_TARGET(83)  quaternion, body_rates, thrust  姿态期望
+- SERVO_OUTPUT_RAW(36)  servo1_raw..  PWM 输出
+- RC_CHANNELS(65)  chan_raw  遥控输入
 
-### 导航与位置消息
+### 指令
+- COMMAND_LONG(76)  command, param1..7  通用命令
+- COMMAND_ACK(77)  result  指令反馈
 
-1. **GLOBAL_POSITION_INT** (ID=33)
-   - 包含全球位置、高度和速度
-   - 纬度/经度以1E7度为单位，高度以毫米为单位
+### HUD / 状态补充
+- VFR_HUD(74)  airspeed, groundspeed, alt, climb, heading, throttle
 
-2. **LOCAL_POSITION_NED** (ID=32)
-   - 北-东-下坐标系中的位置
+### 数据流/时间同步 (较少直接用)
+- REQUEST_DATA_STREAM(66)  请求旧式数据流 (PX4 新版多用 MESSAGE_INTERVAL 指令)
+- TIMESYNC(111)  高频时间基准
 
-3. **GPS_RAW_INT** (ID=24)
-   - GPS接收机的原始数据
+## 常见用法提示
+- 高频本地位置: 订阅 LOCAL_POSITION_NED 与 ODOMETRY 任选一主用，避免重复绘制。
+- 任务下载顺序: MISSION_REQUEST_LIST → MISSION_COUNT → 逐个 MISSION_REQUEST → MISSION_ITEM(_INT) → MISSION_ACK。
+- 调整输出频率: 使用 COMMAND_LONG + MAV_CMD_SET_MESSAGE_INTERVAL (取代 REQUEST_DATA_STREAM)。
+- 高度一致性: 若 GLOBAL_POSITION_INT 与 ALTITUDE 同时使用，统一 relative_alt 为主图，ALTITUDE 提供 AMSL 校验。
 
-4. **ATTITUDE** (ID=30)
-   - 飞行器姿态(滚转、俯仰、偏航)
+## 典型调试命令 (PX4 Shell)
+```
+mavlink status
+listener vehicle_local_position
+listener sensor_combined
+mavlink stream -u 14550 -s LOCAL_POSITION_NED -r 30
+```
 
-5. **ALTITUDE** (ID=141)
-   - 不同参考系的高度数据
+## 可视化脚本参数简表
+--show-vel / --show-imu / --show-alt / --show-gps / --show-servo 按需开启子图
+--mission-request  启动时请求全任务
+--time-window N    滑动窗口 (秒)
+--window N         缓冲最大点数
 
-### 任务规划消息
+## 最小启动流程
+1) 启动 PX4:  make px4_sitl_default none_iris
+2) (可选) 开第二链路: mavlink start -u 14552 -o 14551 -m onboard -r 400000 -t 127.0.0.1 -f
+3) 启动可视化: python main.py --conn udp:0.0.0.0:14551 --show-vel --show-imu --show-alt --mission-request
 
-1. **MISSION_COUNT** (ID=44)
-   - 指示任务包含多少个航点
-
-2. **MISSION_ITEM** (ID=39)
-   - 单个航点信息
-   - 包含位置、命令类型、参数等
-
-3. **MISSION_REQUEST** (ID=40)
-   - 请求特定序号的航点
-
-4. **MISSION_ACK** (ID=47)
-   - 确认任务操作完成
-
-5. **MISSION_CURRENT** (ID=42)
-   - 当前执行的航点序号
-
-6. **MISSION_ITEM_REACHED** (ID=46)
-   - 到达指定航点的通知
-
-### 命令消息
-
-1. **COMMAND_LONG** (ID=76)
-   - 发送命令到飞行器
-   - 包含命令ID和最多7个参数
-
-2. **COMMAND_ACK** (ID=77)
-   - 命令确认回复
-
-### 参数操作消息
-
-1. **PARAM_REQUEST_LIST** (ID=21)
-   - 请求所有参数列表
-
-2. **PARAM_VALUE** (ID=22)
-   - 单个参数的值
-
-3. **PARAM_SET** (ID=23)
-   - 设置参数值
-
-### 数据流控制
-
-1. **REQUEST_DATA_STREAM** (ID=66)
-   - 请求特定类型的数据流
-   - 可以设置数据流频率
-
-2. **DATA_STREAM** (ID=67)
-   - 数据流设置信息
-
-### 扩展状态消息
-
-1. **VFR_HUD** (ID=74)
-   - 飞行数据，包括空速、地速、高度等
-
-2. **STATUSTEXT** (ID=253)
-   - 状态文本消息，用于日志和警告
-
-3. **RC_CHANNELS** (ID=65)
-   - 遥控通道值

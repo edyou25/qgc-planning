@@ -103,13 +103,18 @@ class MavlinkClient:
                 for i in range(8):
                     servo_buf.ch[i].append(getattr(msg,f'servo{i+1}_raw',1500))
             elif tname == "MISSION_ITEM" and not self.args.no_mission:
+                self.logger.info(f"Mission item received: seq={msg.seq}, x={msg.x}, y={msg.y}, z={msg.z}")
                 missions.append((msg.seq, msg.x, msg.y, msg.z))
             elif tname == "MISSION_ITEM_INT" and not self.args.no_mission:
+                self.logger.info(f"Mission item received: seq={msg.seq}, x={msg.x}, y={msg.y}, z={msg.z}")
                 lat = msg.x/1e7 if hasattr(msg,'x') else 0
                 lon = msg.y/1e7 if hasattr(msg,'y') else 0
                 missions.append((msg.seq, lat, lon, getattr(msg,'z',0)))
             elif tname == "MISSION_COUNT" and not self.args.no_mission:
                 self.logger.info(f"Mission count: {getattr(msg,'count','?')}")
+            elif tname == "MISSION_CURRENT" and not self.args.no_mission:
+                self.logger.debug(f"Current mission item: {getattr(msg,'seq','?')}")
+                self.logger.debug(f"msg: {msg}")
 
     def close(self):
         try:
