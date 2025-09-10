@@ -1,4 +1,11 @@
 # Planning-QGC-PX4-AirSim
+
+```shell
+make px4_sitl_default none_iris
+mavlink start -u 14552 -o 14551 -m onboard -r 400000 -t 127.0.0.1 -f
+```
+
+
 ## 通信架构概述
 
 1. **PX4 (WSL)** → 向QGC发送飞行数据
