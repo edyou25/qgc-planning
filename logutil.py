@@ -5,7 +5,8 @@ def setup_logger(log_path: str, name: str = "mavviz", console_level: int = loggi
     logger = logging.getLogger(name)
     logger.setLevel(logging.DEBUG)
     logger.handlers.clear()
-    fmt = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+    # Use absolute path (pathname) with line number
+    fmt = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s (%(pathname)s:%(lineno)d)')
     ch = logging.StreamHandler(); ch.setLevel(console_level); ch.setFormatter(fmt)
     logger.addHandler(ch)
     try:

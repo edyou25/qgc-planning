@@ -1,1 +1,3 @@
-2025-09-10 14:07:23,161 - INFO - ✅ MAVLink connected: udp:127.0.0.1:14551 (sys=1 comp=0)
+2025-09-10 14:25:25,692 - INFO - ✅ MAVLink connected: udp:127.0.0.1:14551 (sys=1 comp=0) (/home/hw/qgc-planning/mavlink_client.py:19)
+2025-09-10 14:25:25,692 - INFO - Requesting mission list... (/home/hw/qgc-planning/mavlink_client.py:24)
+2025-09-10 14:25:26,097 - INFO - Mission count: 39 (/home/hw/qgc-planning/mavlink_client.py:112)
