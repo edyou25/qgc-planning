@@ -58,9 +58,9 @@ running = True  # global flag for graceful shutdown
 try:
     m = mavutil.mavlink_connection(CONN)
     m.wait_heartbeat(timeout=5)
-    print(f"✅ Connected to system {m.target_system}, component {m.target_component}")
+    logging.info(f"✅ MAVLink connected: {CONN}")
 except Exception as e:
-    print(f"❌ MAVLink connection failed: {e}")
+    logging.error(f"❌ MAVLink connection failed: {e}")
     sys.exit(1)
 
 # -------------------------
@@ -109,6 +109,7 @@ def update(frame):
     if msg:
         tname = msg.get_type()
         if tname in ("LOCAL_POSITION_NED", "LOCAL_POSITION"):
+            logging.debug(f"Position msg: x={msg.x}, y={msg.y}, z={msg.z}")
             xs.append(msg.x)
             ys.append(msg.y)
             zs.append(msg.z)
@@ -118,6 +119,7 @@ def update(frame):
             yaws.append(None)
             times.append(now)
         elif tname == "ATTITUDE":
+            logging.debug(f"Attitude msg: roll={msg.roll}, pitch={msg.pitch}, yaw={msg.yaw}")
             rolls.append(msg.roll)
             pitchs.append(msg.pitch)
             yaws.append(msg.yaw)
@@ -126,8 +128,8 @@ def update(frame):
             zs.append(None)
             times.append(now)
         elif tname == "MISSION_ITEM":
-            missions.append((msg.seq, msg.x, msg.y, msg.z))
             logging.info(f"Mission item added: seq={msg.seq}, x={msg.x}, y={msg.y}, z={msg.z}")
+            missions.append((msg.seq, msg.x, msg.y, msg.z))
 
     # -------------------------
     # 更新左边 subplot
