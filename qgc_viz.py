@@ -7,7 +7,29 @@ from pymavlink import mavutil
 from collections import deque
 import time
 import numpy as np
+import signal
+import sys
+import logging
+# 创建 logger
+logger = logging.getLogger("my_logger")
+logger.setLevel(logging.DEBUG)  # 设置全局最低日志级别
 
+# 控制台 handler
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)  # 控制台显示 INFO 及以上
+
+# 文件 handler
+file_handler = logging.FileHandler("/home/hw/qgc-planning/logs/mavviz.log", mode='w')
+file_handler.setLevel(logging.DEBUG)    # 文件记录 DEBUG 及以上
+
+# 日志格式
+formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+console_handler.setFormatter(formatter)
+file_handler.setFormatter(formatter)
+
+# 添加 handler 到 logger
+logger.addHandler(console_handler)
+logger.addHandler(file_handler)
 # -------------------------
 # 配置参数
 # -------------------------
@@ -28,13 +50,18 @@ pitchs = deque(maxlen=WINDOW)
 yaws = deque(maxlen=WINDOW)
 
 missions = []  # mission item list: [(seq, x, y, z)]
+running = True  # global flag for graceful shutdown
 
 # -------------------------
 # 建立 MAVLink 连接
 # -------------------------
-m = mavutil.mavlink_connection(CONN)
-m.wait_heartbeat(timeout=5)
-print(f"✅ Connected to system {m.target_system}, component {m.target_component}")
+try:
+    m = mavutil.mavlink_connection(CONN)
+    m.wait_heartbeat(timeout=5)
+    print(f"✅ Connected to system {m.target_system}, component {m.target_component}")
+except Exception as e:
+    print(f"❌ MAVLink connection failed: {e}")
+    sys.exit(1)
 
 # -------------------------
 # 初始化绘图
@@ -54,11 +81,13 @@ ax1.set_ylabel("Position / Attitude")
 ax1.legend()
 ax1.grid(True)
 
-# 右边 subplot: mission
+# 右边 subplot: mission (keep a persistent line to avoid full clear each frame)
 ax2.set_title("Mission Waypoints")
 ax2.set_xlabel("X [m]")
 ax2.set_ylabel("Y [m]")
 ax2.grid(True)
+mission_line, = ax2.plot([], [], "o-", label="Waypoints")
+ax2.legend()
 
 start_time = time.time()
 
@@ -68,6 +97,9 @@ def init():
     return (line_x, line_y, line_z, line_roll, line_pitch, line_yaw)
 
 def update(frame):
+    if not running:
+        return ()
+
     msg = m.recv_match(blocking=False)
     now = time.time() - start_time
 
@@ -95,6 +127,7 @@ def update(frame):
             times.append(now)
         elif tname == "MISSION_ITEM":
             missions.append((msg.seq, msg.x, msg.y, msg.z))
+            logging.info(f"Mission item added: seq={msg.seq}, x={msg.x}, y={msg.y}, z={msg.z}")
 
     # -------------------------
     # 更新左边 subplot
@@ -124,23 +157,47 @@ def update(frame):
             ax1.set_ylim(ymin - 0.5, ymax + 0.5)
 
     # -------------------------
-    # 更新右边 subplot (mission)
+    # 更新右边 subplot (mission) - only data change
     # -------------------------
-    ax2.clear()
-    ax2.set_title("Mission Waypoints")
-    ax2.set_xlabel("X [m]")
-    ax2.set_ylabel("Y [m]")
-    ax2.grid(True)
     if missions:
-        mx = [m[1] for m in missions]
-        my = [m[2] for m in missions]
-        ax2.plot(mx, my, "o-", label="Waypoints")
-        ax2.legend()
+        mx = [mi[1] for mi in missions]
+        my = [mi[2] for mi in missions]
+        mission_line.set_data(mx, my)
+        ax2.relim()
+        ax2.autoscale_view()
+    else:
+        mission_line.set_data([], [])
 
-    return (line_x, line_y, line_z, line_roll, line_pitch, line_yaw)
+    return (line_x, line_y, line_z, line_roll, line_pitch, line_yaw, mission_line)
 
 # -------------------------
 # 动画
 # -------------------------
-ani = animation.FuncAnimation(fig, update, init_func=init, interval=PLOT_INTERVAL, blit=False)
+def shutdown(*_):
+    global running
+    if not running:
+        return
+    running = False
+    try:
+        ani.event_source.stop()
+    except Exception:
+        pass
+    try:
+        m.close()
+    except Exception:
+        pass
+    plt.close(fig)
+
+signal.signal(signal.SIGINT, shutdown)
+fig.canvas.mpl_connect('close_event', lambda evt: shutdown())
+
+# cache_frame_data disabled to silence warning when frames is infinite/None
+ani = animation.FuncAnimation(
+    fig,
+    update,
+    init_func=init,
+    interval=PLOT_INTERVAL,
+    blit=False,
+    cache_frame_data=False,
+)
 plt.show()
