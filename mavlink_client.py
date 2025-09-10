@@ -25,6 +25,9 @@ class MavlinkClient:
         self.autopilot_sysid = None
         self.autopilot_compid = None
         self._hb_last = 0.0
+        # New flags for robust autopilot detection
+        self.autopilot_confirmed = False
+        self._pending_mission_after_autopilot = False
 
     # ----------------- Connection -----------------
     def connect(self, timeout=5):
@@ -34,13 +37,43 @@ class MavlinkClient:
             source_system=getattr(self.args, 'source_system', 252),
             source_component=getattr(self.args, 'source_component', 191)
         )
-        hb = self.m_active.wait_heartbeat(timeout=timeout)
-        self.autopilot_sysid = hb.get_srcSystem()
-        self.autopilot_compid = hb.get_srcComponent() or 1
+        # Proactively send a couple heartbeats to establish reverse path (for no -o instances)
+        try:
+            for _ in range(2):
+                self.m_active.mav.heartbeat_send(
+                    mavutil.mavlink.MAV_TYPE_GCS,
+                    mavutil.mavlink.MAV_AUTOPILOT_INVALID,
+                    0, 0, 0
+                ); time.sleep(0.05)
+        except Exception:
+            pass
+        # Collect heartbeats until autopilot (sysid=1 & compid=1, or type looks like vehicle)
+        deadline = time.time() + timeout
+        first_hb = None
+        while time.time() < deadline:
+            hb = self.m_active.recv_match(type='HEARTBEAT', blocking=True, timeout=0.5)
+            if not hb:
+                continue
+            if first_hb is None:
+                first_hb = hb
+            if self._is_autopilot_hb(hb):
+                self.autopilot_sysid = hb.get_srcSystem()
+                self.autopilot_compid = hb.get_srcComponent() or 1
+                self.autopilot_confirmed = True
+                break
+        if not self.autopilot_confirmed:
+            # Fallback: use first heartbeat but warn; mission requests will defer
+            hb = first_hb
+            if hb is None:
+                raise RuntimeError(f"No HEARTBEAT received on {self.conn_active_str} within {timeout}s")
+            self.autopilot_sysid = hb.get_srcSystem()
+            self.autopilot_compid = hb.get_srcComponent() or 1
+            self.logger.warning(f"Autopilot heartbeat not confirmed (using first sysid={self.autopilot_sysid}); mission requests will wait for real autopilot.")
         self.m_active.target_system = self.autopilot_sysid
         self.m_active.target_component = self.autopilot_compid
         try: self.m_active.mav.set_proto_version(2)
         except Exception: pass
+        # Passive link unchanged
         if self.conn_passive_str:
             # Passive (receive only) use different component id to avoid confusing autopilot; suppress heartbeats
             self.m_passive = mavutil.mavlink_connection(
@@ -54,24 +87,50 @@ class MavlinkClient:
                 pass
             self.logger.info(f"📡 Passive link attached: {self.conn_passive_str}")
         self.start_time = time.time()
-        self.logger.info(f"✅ Active link: {self.conn_active_str} (local={self.m_active.mav.srcSystem}/{self.m_active.mav.srcComponent} target={self.autopilot_sysid}/{self.autopilot_compid})")
+        self.logger.info(f"✅ Active link: {self.conn_active_str} (local={self.m_active.mav.srcSystem}/{self.m_active.mav.srcComponent} target={self.autopilot_sysid}/{self.autopilot_compid} confirmed={self.autopilot_confirmed})")
+        # If mission auto-request was intended and we haven't confirmed autopilot yet, mark pending
+        if self.args.mission_request and not self.args.passive_mission and not self.autopilot_confirmed:
+            self._pending_mission_after_autopilot = True
 
-    def _send_heartbeat(self):
-        now = time.time()
-        if now - self._hb_last >= 1.0 and self.m_active:
-            try:
-                self.m_active.mav.heartbeat_send(
-                    mavutil.mavlink.MAV_TYPE_GCS,
-                    mavutil.mavlink.MAV_AUTOPILOT_INVALID,
-                    0, 0, 0
-                )
-                self._hb_last = now
-            except Exception:
-                pass
+    def _is_autopilot_hb(self, msg):
+        try:
+            if msg.get_type() != 'HEARTBEAT':
+                return False
+            # Common vehicle types
+            vehicle_types = {
+                mavutil.mavlink.MAV_TYPE_GENERIC,
+                mavutil.mavlink.MAV_TYPE_QUADROTOR,
+                mavutil.mavlink.MAV_TYPE_FIXED_WING,
+                mavutil.mavlink.MAV_TYPE_VTOL_QUADROTOR,
+                mavutil.mavlink.MAV_TYPE_HELICOPTER,
+                mavutil.mavlink.MAV_TYPE_GROUND_ROVER,
+                mavutil.mavlink.MAV_TYPE_SUBMARINE
+            }
+            return ((msg.get_srcSystem() == 1 and msg.get_srcComponent() == 1) or (msg.type in vehicle_types and msg.get_srcComponent() == 1))
+        except Exception:
+            return False
+
+    def _maybe_correct_target(self, msg):
+        if not self.autopilot_confirmed and self._is_autopilot_hb(msg):
+            self.autopilot_sysid = msg.get_srcSystem()
+            self.autopilot_compid = msg.get_srcComponent() or 1
+            self.m_active.target_system = self.autopilot_sysid
+            self.m_active.target_component = self.autopilot_compid
+            self.autopilot_confirmed = True
+            self.logger.info(f"🔄 Autopilot confirmed: {self.autopilot_sysid}/{self.autopilot_compid}; updating target.")
+            if self._pending_mission_after_autopilot:
+                self._pending_mission_after_autopilot = False
+                # Delay tiny bit to avoid overlapping with other GCS flows
+                time.sleep(0.15)
+                self.request_mission()
 
     # ----------------- Mission Download -----------------
     def request_mission(self):
         if not self.m_active or self.args.no_mission or self.args.passive_mission:
+            return
+        if not self.autopilot_confirmed:
+            self.logger.info("Autopilot not confirmed yet; deferring mission request.")
+            self._pending_mission_after_autopilot = True
             return
         if self.mdl_active:
             self.logger.debug("Mission download already active, skip.")
@@ -156,11 +215,13 @@ class MavlinkClient:
         pos_buf = self.state.pos; att_buf = self.state.att; vel_buf = self.state.vel
         imu_buf = self.state.imu; alt_buf = self.state.alt; gps_buf = self.state.gps
         servo_buf = self.state.servo; missions = self.state.mission.missions; args = self.args
-
+        # Drain function patched to include heartbeat correction
         def drain(conn):
             while True:
                 msg = conn.recv_match(blocking=False)
                 if not msg: break
+                if msg.get_type() == 'HEARTBEAT':
+                    self._maybe_correct_target(msg)
                 tname = msg.get_type(); t = self._next_time()
                 if tname == "LOCAL_POSITION_NED":
                     if all(hasattr(msg,a) for a in ('x','y','z')):
@@ -229,6 +290,19 @@ class MavlinkClient:
         if self.m_passive:
             drain(self.m_passive)
         self._mission_download_tick()
+
+    def _send_heartbeat(self):
+        now = time.time()
+        if now - getattr(self, '_hb_last', 0.0) >= 1.0 and self.m_active:
+            try:
+                self.m_active.mav.heartbeat_send(
+                    mavutil.mavlink.MAV_TYPE_GCS,
+                    mavutil.mavlink.MAV_AUTOPILOT_INVALID,
+                    0, 0, 0
+                )
+                self._hb_last = now
+            except Exception:
+                pass
 
     def close(self):
         for c in (self.m_active, self.m_passive):
