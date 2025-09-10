@@ -1,96 +1,107 @@
 # Planning-QGC-PX4-AirSim
 ## 通信架构概述
 
-您的系统使用MAVLink协议通过UDP进行通信，形成了如下结构：
-
 1. **PX4 (WSL)** → 向QGC发送飞行数据
 2. **QGC (WSL)** → 处理数据并转发到Windows
 3. **Windows监听程序** → 接收、分析和优化航点数据
 4. **AirSim (Windows)** → 可能通过GeoJSON文件或直接MAVLink连接获取数据
 
-## 关键通信机制分析
+## Mavlink字段
 
-### 1. UDP套接字连接
+# MAVLink 主要消息类型
 
-代码建立了UDP监听连接，监听来自QGC的MAVLink消息：
+MAVLink协议包含大量消息类型，用于无人机系统的通信。以下是一些最常用的消息类型分类：
 
-```python
-conn = mavutil.mavlink_connection(f'udp:{WSL_IP}:{port}')
-```
+## 基础状态与控制消息
 
-关键配置参数包括：
-- `WSL_IP = "0.0.0.0"` - 在所有网络接口上监听
-- `QGC_PORT = 14550` - QGC的默认端口
-- `WINDOWS_IP = "172.26.48.1"` - Windows在WSL网络中的IP地址
+1. **HEARTBEAT** (ID=0)
+   - 系统心跳，包含系统类型、自动驾驶仪类型、系统状态等
+   - 所有MAVLink系统必须每秒发送至少1次
 
-### 2. 多端口监听机制
+2. **SYS_STATUS** (ID=1)
+   - 系统状态，包含电池、通信和传感器状态
 
-代码支持同时监听多个端口，增加数据接收的成功率：
+3. **SYSTEM_TIME** (ID=2)
+   - 同步系统时间
 
-```python
-if MONITOR_MULTIPLE_PORTS:
-    ports_to_try = [QGC_PORT, SIM_PORT]
-```
+4. **PING** (ID=4)
+   - 测试通信延迟和可靠性
 
-这样可以同时捕获来自QGC(14550)和PX4 SITL(14540)的数据。
+### 导航与位置消息
 
-### 3. 数据流请求
+1. **GLOBAL_POSITION_INT** (ID=33)
+   - 包含全球位置、高度和速度
+   - 纬度/经度以1E7度为单位，高度以毫米为单位
 
-为了确保获取实时数据，代码主动向PX4/QGC请求特定类型的数据流：
+2. **LOCAL_POSITION_NED** (ID=32)
+   - 北-东-下坐标系中的位置
 
-```python
-conn.mav.request_data_stream_send(
-    conn.target_system,
-    conn.target_component,
-    mavutil.mavlink.MAV_DATA_STREAM_POSITION,  # 位置数据
-    10,  # 10 Hz频率
-    1    # 启用
-)
-```
+3. **GPS_RAW_INT** (ID=24)
+   - GPS接收机的原始数据
 
-这确保了位置、状态和其他重要数据能以足够的频率传输。
+4. **ATTITUDE** (ID=30)
+   - 飞行器姿态(滚转、俯仰、偏航)
 
-### 4. 多线程监听与处理
+5. **ALTITUDE** (ID=141)
+   - 不同参考系的高度数据
 
-代码使用多线程架构确保实时性：
+### 任务规划消息
 
-1. **位置监听线程**：持续接收位置更新
-   ```python
-   position_thread = threading.Thread(target=position_listener, args=(connection,))
-   ```
+1. **MISSION_COUNT** (ID=44)
+   - 指示任务包含多少个航点
 
-2. **诊断线程**：监控通信状态和数据流
-   ```python
-   diagnostic_t = threading.Thread(target=diagnostic_thread_func)
-   ```
+2. **MISSION_ITEM** (ID=39)
+   - 单个航点信息
+   - 包含位置、命令类型、参数等
 
-3. **模拟线程**：在实际数据不可用时提供模拟位置
-   ```python
-   simulation_thread = threading.Thread(target=simulation_position_updater)
-   ```
+3. **MISSION_REQUEST** (ID=40)
+   - 请求特定序号的航点
 
-### 5. 航点数据交换
+4. **MISSION_ACK** (ID=47)
+   - 确认任务操作完成
 
-监听程序通过MAVLink请求和接收航点数据：
+5. **MISSION_CURRENT** (ID=42)
+   - 当前执行的航点序号
 
-```python
-conn.mav.mission_request_list_send(conn.target_system, conn.target_component)
-```
+6. **MISSION_ITEM_REACHED** (ID=46)
+   - 到达指定航点的通知
 
-然后处理响应：
-```python
-if msg.get_type() == 'MISSION_COUNT':
-    mission_count = msg.count
-elif msg.get_type() == 'MISSION_ITEM':
-    # 处理航点数据
-```
+### 命令消息
 
-### 6. 线程同步机制
+1. **COMMAND_LONG** (ID=76)
+   - 发送命令到飞行器
+   - 包含命令ID和最多7个参数
 
-使用线程锁确保多线程环境下的数据一致性：
+2. **COMMAND_ACK** (ID=77)
+   - 命令确认回复
 
-```python
-with lock:
-    # 安全访问和修改共享数据
-    waypoints_global = waypoints.copy()
-```
+### 参数操作消息
+
+1. **PARAM_REQUEST_LIST** (ID=21)
+   - 请求所有参数列表
+
+2. **PARAM_VALUE** (ID=22)
+   - 单个参数的值
+
+3. **PARAM_SET** (ID=23)
+   - 设置参数值
+
+### 数据流控制
+
+1. **REQUEST_DATA_STREAM** (ID=66)
+   - 请求特定类型的数据流
+   - 可以设置数据流频率
+
+2. **DATA_STREAM** (ID=67)
+   - 数据流设置信息
+
+### 扩展状态消息
+
+1. **VFR_HUD** (ID=74)
+   - 飞行数据，包括空速、地速、高度等
+
+2. **STATUSTEXT** (ID=253)
+   - 状态文本消息，用于日志和警告
+
+3. **RC_CHANNELS** (ID=65)
+   - 遥控通道值
