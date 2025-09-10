@@ -182,7 +182,7 @@ def update_plots(ctx, state, args, TIME_WINDOW):
         artists.extend(list(ctx.servo_art))
     # mission
     if ctx.mission_line is not None:
-        missions = state.mission.missions
+        missions = state.mission.missions[:-1] # exclude last two dummy items
         if missions:
             mx = [mi[1] for mi in missions]; my = [mi[2] for mi in missions]
             ctx.mission_line.set_data(mx, my)

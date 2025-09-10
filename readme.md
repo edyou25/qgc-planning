@@ -1,6 +1,18 @@
 # Planning-QGC-PX4-AirSim
 
 
+```shell
+make px4_sitl_default none_iris
+
+mavlink start -u 14552 -o 14551 -m onboard -r 400000 -t 127.0.0.1 -f
+mavlink start -u 14610 -o 14700 -m onboard -r 400000 -f
+
+
+--conn-active udp:127.0.0.1:14700 --mission-mode active
+
+```
+
+
 ## 通信架构概述
 
 1. **PX4 (WSL)** → 向QGC发送飞行数据
@@ -80,8 +92,6 @@ mavlink stream -u 14550 -s LOCAL_POSITION_NED -r 30
 --time-window N    滑动窗口 (秒)
 --window N         缓冲最大点数
 
-## 最小启动流程
-1) 启动 PX4:  make px4_sitl_default none_iris
-2) (可选) 开第二链路: mavlink start -u 14552 -o 14551 -m onboard -r 400000 -t 127.0.0.1 -f
-3) 启动可视化: python main.py --conn udp:0.0.0.0:14551 --show-vel --show-imu --show-alt --mission-request
+
+
 
